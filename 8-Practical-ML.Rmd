@@ -1,0 +1,110 @@
+---
+title: "Machine Learning Course Project"
+author: "Greg Sutcliffe"
+date: "28 August 2018"
+output: html_document
+---
+
+```{r setup, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, collapse = TRUE)
+```
+
+## Detecting Accurately and Inaccurately Performed Excercises
+
+It is common people regularly do is quantify how much of a particular activity or excercise they do, but they rarely quantify how well they do it.
+
+In this analysis, we use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. These participants have been instructed to perform barbell excercises both correctly and incorrectly. The goal is to detect the ways in which the excercises are done, so that the user improve their technique.
+
+## Summary of results
+
+We build a machine learning algorithm, using the `K nearest neighbours model` with cross validation and pre-processing to improve accuracy. Using a tuning grid, we find that K=1 gives the best accuracy. We partition the training data, and on the validation set we achieve an accuracy of 99.0%
+
+## Loading and preprocessing the data
+
+```{r libs, results='hide', warning=FALSE, error=FALSE, message=FALSE}
+library(dplyr)
+library(caret)
+library(readr)
+library(curl)
+library(knitr)
+
+set.seed(13579)
+
+if (!file.exists('/tmp/week4-training-data.csv')) {
+    curl::curl_download('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv',
+    '/tmp/week4-training-data.csv')
+}
+train <- read_csv('/tmp/week4-training-data.csv', na=c('NA','#DIV/0!'))
+```
+
+The data consists of `r dim(train)[1]` observations on `r dim(train)[2]` variables. However, some of the columns aren't required. Firstly, we remove all the timestamp and participant columns, as we don't want to train on time of day, on the person doing the exercise. Secondly, many of the columns are only defined at infrequent points - these make poor predictors, so we remove columns containing NA values. Finally we make our target `classe` variable into a factor.
+
+```{r cleaning}
+train <- select(train, -(X1:num_window)) %>% #remove uninteresting columns
+  select(which(colSums(is.na(.)) == 0)) %>% #Drop columns with NAs in
+  mutate(classe = as.factor(classe))
+```
+
+Nearly 20k observations means we can safely take a portion of the data for validation later.
+
+```{r validation, echo=TRUE}
+inTrain = createDataPartition(train$classe, p = 3/4)[[1]]
+training = train[inTrain,]
+validate = train[-inTrain,]
+```
+
+## Model selection
+
+We need to select an algorith to use. As this is a classification problem, with plenty of data, we start with a linear Support Vector Machine. We use preprocessing to centre and scale the data, as normal. Since we have plenty of data, we use cross-validation as well. The accuracy can then be calculated by comparing the predicted outcomes of the `validate` dataset to the real ones.
+
+```{r svm}
+svm_linear_model = train(
+    classe ~ .,
+    data = training,
+    method = "svmLinear",
+    trControl = trainControl(method = "cv", number = 5),
+    preProcess = c("center", "scale")
+)
+```
+```{r}
+check <- predict(svm_linear_model,newdata = validate)
+paste("Accuracy:", round(mean(check == validate$classe),4))
+```
+
+We can see that the SVM model is not great (74% accuracy) - perhaps we can do better. 
+
+A K-nearest-neighbours model is also appropriate for classification trees.Again we centre and scale the data, and use cross-validation. We also use a tuning grid to determine the best number for K.
+
+```{r knn}
+knn_model = train(
+    classe ~ .,
+    data = training,
+    method = "knn",
+    trControl = trainControl(method = "cv", number = 5),
+    preProcess = c("center", "scale"),
+    tuneGrid = expand.grid(k = seq(1, 11, by = 2))
+)
+```
+```{r}
+check <- predict(knn_model,newdata = validate)
+paste("Accuracy:", round(mean(check == validate$classe),4))
+```
+
+This seems much better (99%!). We can plot the tuning grid to see how accuracy changes with neighbours.
+
+```{r}
+plot(scaled_knn_mod)
+```
+
+So it seems K=1 is our best model, with accuracy falling as K increases.
+
+## Model Accuracy and Errors
+
+We have already seen the overall accuracy of the model above (99%). We can also calculate the `confusionMatrix` to see how well the model performs on the various parts of validation dataset.
+
+```{r confusion}
+cm <- confusionMatrix(predict(scaled_knn_mod,newdata = validate),validate$classe)
+kable(cm$table)
+```
+
+So we can see that just 11 of the 4904 validation cases are wrong - or a `r (11/4904)*100`% out-of-sample error rate.
